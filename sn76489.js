@@ -1,5 +1,6 @@
 function SN76489() {
 	if (!this instanceof SN76489) return new SN76489();
+	this.attenuation = 16384;
 /*
 	void SN76489_Init(int which, int PSGClockValue, int SamplingRate);
 	void SN76489_Reset(int which);
@@ -15,7 +16,7 @@ function SN76489() {
 */
 }
 
-(function(){
+(function(S){
 var SN = {};
 SN.feedback_patterns = {
 	FB_BBCMICRO:0x8005,
@@ -59,10 +60,11 @@ var sn76489 = (function() {
 	o.ToneFreqPos = [0,0,0,0];	// INT8[4], frequency channel flip-flops
 	o.Channels = [0,0,0,0];	// INT16[4], value of each channel before stereo is applied
 	o.IntermediatePos = [0,0,0,0];	// INT32[4], intermediate values used at boundaries between + and -
+	o.muted = [0,0,0,0];	// +neo
 	return o;
 })();
 
-SN76489.prototype.ENUM = {
+S.prototype.ENUM = {
 	feedback_patterns:SN.feedback_patterns,
 	volume_modes:SN.volume_modes,
 	boost_modes:SN.boost_modes,
@@ -72,12 +74,12 @@ SN76489.prototype.ENUM = {
 SN.NoiseInitialState = 0x8000;
 SN.PSG_CUTOFF = 0x6;
 SN.PSGVolumeValues = [
-	[892,892,892,760,623,497,404,323,257,198,159,123,96,75,60,0],	// adjusted
-	[1516,1205,957,760,603,479,381,303,240,191,152,120,96,76,60,0],	// actual
-	[4096,3254,2584,2053,1631,1295,1029,817,649,516,410,325,258,205,163,0]	// MAME
+	[892,892,892,760,623,497,404,323,257,198,159,123,96,75,60,0],
+	[1516,1205,957,760,603,479,381,303,240,191,152,120,96,76,60,0],
+	[4096,3254,2584,2053,1631,1295,1029,817,649,516,410,325,258,205,163,0]
 ];
 
-SN76489.prototype.reset = function() {
+S.prototype.reset = function() {
 	console.log("SN::reset");
 	(function(p){
 		p.PSGStereo = 0xff;
@@ -93,16 +95,17 @@ SN76489.prototype.reset = function() {
 		p.LatchedRegister = 0;
 		p.NoiseShiftRegister = SN.NoiseInitialState;	// init noise generator
 		p.NoiseFreq = 0x10;
+		p.muted = [0,0,0,0];	// +neo
 		p.Clock = 0;	// zero the clock
 	})(sn76489);
 };
-SN76489.prototype.init = function(pcl, srate) {	// int clock value, int sampling rate
+S.prototype.init = function(pcl, srate) {	// int clock value, int sampling rate
 	sn76489.dClock = pcl*1.0/(srate<<4);
 	console.log("SN::init("+pcl+','+srate+','+sn76489.dClock+")");
 	this.reset();
 };
-SN76489.prototype.shutdown = function(){};
-SN76489.prototype.config = function(mute, boost, volume, feedback, nsw) {	// int, int, int, int, int
+S.prototype.shutdown = function(){};
+S.prototype.config = function(mute, boost, volume, feedback, nsw) {	// int, int, int, int, int
 	console.log("SN::config("+mute.toString(2)+','+(boost?1:0)+','+volume+','+feedback+','+nsw+")");
 	(function(p){
 		p.Mute = mute;
@@ -112,11 +115,11 @@ SN76489.prototype.config = function(mute, boost, volume, feedback, nsw) {	// int
 		p.NoiseShiftWidth = nsw;
 	})(sn76489);
 };
-SN76489.prototype.setContext = function(){};
-SN76489.prototype.getContext = function(){};
-SN76489.prototype.getContextPtr = function(){return sn76489;};
-SN76489.prototype.getContextSize = function(){return 1;};
-SN76489.prototype.write = function(data) {	// int
+S.prototype.setContext = function(){};
+S.prototype.getContext = function(){};
+S.prototype.getContextPtr = function(){return sn76489;};
+S.prototype.getContextSize = function(){return 1;};
+S.prototype.write = function(data) {	// int
 	(function(p){
 		if (data&0x80) {	// latch/data byte	%1 cc t dddd
 			//console.log("PSG::write L "+data.toString(2)+" - "+((data>>5)&0x3)+" "+(data&0x10?'V':'T')+" "+(data&0xf).toString(2));
@@ -142,16 +145,16 @@ SN76489.prototype.write = function(data) {	// int
 		}
 	})(sn76489);
 };
-SN76489.prototype.GGStereoWrite = function(data){sn76489.PSGStereo=data;};
-SN76489.prototype.update = function(len) {
+S.prototype.GGStereoWrite = function(data){sn76489.PSGStereo=data;};
+S.prototype.update = function(len) {
 	if (!sn76489.dClock) return;
 	var buf = [[],[]];
 	(function(p){
 		var i, j, nsr = [], fv = [], q = [], _r;
 		j = -1; while (++j<len) {
-			/*q[0] = p.ToneFreqVals[0].toFixed(2);
+			q[0] = p.ToneFreqVals[0].toFixed(2);
 			q[1] = p.Registers[0];
-			q[2] = p.NumClocksForSample/p.Registers[0];*/
+			q[2] = p.NumClocksForSample/p.Registers[0];
 			i = -1; while (++i<3) {
 				_r = i<<1;
 				p.Channels[i] = ((p.Mute>>i)&0x1)*SN.PSGVolumeValues[p.VolumeArray][p.Registers[_r+1]]*(
@@ -161,7 +164,7 @@ SN76489.prototype.update = function(len) {
 				);
 				//console.log("ch "+i+" "+(p.Mute>>i&0x1?'+':'-')+" "+p.Channels[i]+" (reg "+(1+(i<<1))+"="+p.Registers[(i<<1)+1]+" v "+SN.PSGVolumeValues[p.VolumeArray][p.Registers[(i<<1)+1]]+" ipos "+p.IntermediatePos[i]+" fpos "+p.ToneFreqPos[i]+")");
 			}
-			//fv[fv.length] = '['+q.toString(',')+']';
+			fv[fv.length] = '['+q.toString(',')+']';
 			//console.log("ch "+i+" "+(p.Mute>>i&0x1?'+':'-')+" "+p.Channels[i]+" (reg "+(1+(i<<1))+"="+p.Registers[(i<<1)+1]+" v "+SN.PSGVolumeValues[p.VolumeArray][p.Registers[(i<<1)+1]]+" nsr "+p.NoiseShiftRegister+")");
 			p.Channels[3] = ((p.Mute>>3)&0x1)*SN.PSGVolumeValues[p.VolumeArray][p.Registers[7]]*((p.NoiseShiftRegister&0x01)<<1-1);
 			//nsr.push(p.Channels[3]/16384);
@@ -172,17 +175,20 @@ SN76489.prototype.update = function(len) {
 			p.NumClocksForSample = (p.Clock)|0;
 			p.Clock -= p.NumClocksForSample;
 			//// buffer
+			buf[0][j] = buf[1][j] = 0;
 			i = 3;
-			buf[0][j] = ((p.PSGStereo>>(i+4))&0x1)*p.Channels[i];
-			buf[1][j] = ((p.PSGStereo>>i)&0x1)*p.Channels[i];
+			if (!p.muted[i])
+				buf[0][j] += ((p.PSGStereo>>(i+4))&0x1)*p.Channels[i],
+				buf[1][j] += ((p.PSGStereo>>i)&0x1)*p.Channels[i];
 			//buf[0][j] = 0;
 			//buf[1][j] = 0;
 			var _f3 = null;
 			i = -1; while (++i<3) {
 				//console.log("buf["+j+"]["+i+"]="+p.Channels[i]);
 				_r = i<<1;
-				buf[0][j] += ((p.PSGStereo>>(i+4))&0x1)*p.Channels[i];
-				buf[1][j] += ((p.PSGStereo>>i)&0x1)*p.Channels[i];
+				if (!p.muted[i])
+					buf[0][j] += ((p.PSGStereo>>(i+4))&0x1)*p.Channels[i],
+					buf[1][j] += ((p.PSGStereo>>i)&0x1)*p.Channels[i];
 				//// rolled into buffer loop for fewer loops
 				//if (i<3) {
 					p.ToneFreqVals[i] -= p.NumClocksForSample;
@@ -261,5 +267,129 @@ SN76489.prototype.update = function(len) {
 	})(sn76489);
 	return buf;
 };
+/** interleaved stereo mix +neo **/
+S.prototype.mixStereo = function(buf,len,z) {
+	if (!sn76489.dClock) return buf;
+	var _sc = 1.0/this.attenuation;
+	(function(p){
+		var i, j, nsr = [], fv = [], q = [], _r, vl = 0, vr = 0;
+		var n = z|0;
+		j = -1; while (++j<len) {
+			q[0] = p.ToneFreqVals[0].toFixed(2);
+			q[1] = p.Registers[0];
+			q[2] = p.NumClocksForSample/p.Registers[0];
+			i = -1; while (++i<3) {
+				_r = i<<1;
+				p.Channels[i] = ((p.Mute>>i)&0x1)*SN.PSGVolumeValues[p.VolumeArray][p.Registers[_r+1]]*(
+					p.IntermediatePos[i]!==null?
+						p.IntermediatePos[i]/65536.0 :
+						p.ToneFreqPos[i]
+				);
+				//console.log("ch "+i+" "+(p.Mute>>i&0x1?'+':'-')+" "+p.Channels[i]+" (reg "+(1+(i<<1))+"="+p.Registers[(i<<1)+1]+" v "+SN.PSGVolumeValues[p.VolumeArray][p.Registers[(i<<1)+1]]+" ipos "+p.IntermediatePos[i]+" fpos "+p.ToneFreqPos[i]+")");
+			}
+			fv[fv.length] = '['+q.toString(',')+']';
+			//console.log("ch "+i+" "+(p.Mute>>i&0x1?'+':'-')+" "+p.Channels[i]+" (reg "+(1+(i<<1))+"="+p.Registers[(i<<1)+1]+" v "+SN.PSGVolumeValues[p.VolumeArray][p.Registers[(i<<1)+1]]+" nsr "+p.NoiseShiftRegister+")");
+			p.Channels[3] = ((p.Mute>>3)&0x1)*SN.PSGVolumeValues[p.VolumeArray][p.Registers[7]]*((p.NoiseShiftRegister&0x01)<<1-1);
+			//nsr.push(p.Channels[3]/16384);
+			//console.log(p.NoiseShiftRegister&0x1);
+			if (p.BoostNoise) p.Channels[3] = p.Channels[3]*2;	// double noise volume if preferred
+			//// advance counters
+			p.Clock += p.dClock;
+			p.NumClocksForSample = (p.Clock)|0;
+			p.Clock -= p.NumClocksForSample;
+			//// buffer
+			//buf[0][j] = buf[1][j] = 0;
+			vl = 0, vr = 0;
+			i = 3; if (!p.muted[i])
+				vl += ((p.PSGStereo>>(i+4))&0x1)*p.Channels[i],
+				vr += ((p.PSGStereo>>i)&0x1)*p.Channels[i];
+			var _f3 = null;
+			i = -1; while (++i<3) {
+				//console.log("buf["+j+"]["+i+"]="+p.Channels[i]);
+				_r = i<<1;
+				if (!p.muted[i])
+					vl += ((p.PSGStereo>>(i+4))&0x1)*p.Channels[i],
+					vr += ((p.PSGStereo>>i)&0x1)*p.Channels[i];
+				//// rolled into buffer loop for fewer loops
+				//if (i<3) {
+					p.ToneFreqVals[i] -= p.NumClocksForSample;
+					if (i===2) _f3 = p.ToneFreqVals[i];
+					if (p.ToneFreqVals[i]<=0) {
+						if (p.Registers[i<<1]>SN.PSG_CUTOFF) {
+							p.IntermediatePos[i] = ((p.NumClocksForSample-p.Clock+(p.ToneFreqVals[i]*2.0))*p.ToneFreqPos[i]/(p.NumClocksForSample+p.Clock)*65536.0);//|0;
+							p.ToneFreqPos[i] = 0-p.ToneFreqPos[i];	// flip the flip-flop
+						}
+						else {
+							p.ToneFreqPos[i] = 1;	// stuck value
+							p.IntermediatePos[i] = null;
+						}
+						p.ToneFreqVals[i] += p.Registers[_r]*1.0*((p.NumClocksForSample/p.Registers[_r]+1)|0);
+					}
+					else p.IntermediatePos[i] = null;
+					//p.ToneFreqVals[i] |= 0;
+				//}
+			}
+			// decrement tone channel counters
+			//i = -1; while (++i<3) p.ToneFreqVals[i] -= p.NumClocksForSample;	// moved to buffer loop for speed
+			// noise channel: match to tone2 or decrement its counter
+			if (p.NoiseFreq===0x80&&_f3!==null) p.ToneFreqVals[3] = _f3;
+			else p.ToneFreqVals[3] -= p.NumClocksForSample;
+			/*i = -1; while (++i<3) {	// tone channels
+				if (p.ToneFreqVals[i]<=0) {
+					if (p.Registers[i<<1]>=SN.PSG_CUTOFF) {
+						p.IntermediatePos[i] = ((p.NumClocksForSample-p.Clock+(p.ToneFreqVals[i]<<1))*p.ToneFreqPos[i]/(p.NumClocksForSample+p.Clock)*65536)|0;
+						p.ToneFreqPos[i] = 0-p.ToneFreqPos[i];	// flip the flip-flop
+					}
+					else {
+						p.ToneFreqPos[i] = 1;	// stuck value
+						p.IntermediatePos[i] = null;
+					}
+					p.ToneFreqVals[i] += p.Registers[i<<1]*(p.NumClocksForSample/p.Registers[i<<1]+1);
+				}
+				else p.IntermediatePos[i] = null;
+			}*/	// moved to buffer loop for speed
+			if (p.ToneFreqVals[3]<=0) {	// noise channel
+				p.ToneFreqPos[3] = 0-p.ToneFreqPos[3];	// flip the flip-flop
+				if (p.NoiseFreq!==0x80)	// if not matching tone2, decrement counter
+					p.ToneFreqVals[3] += p.NoiseFreq*(p.NumClocksForSample/p.NoiseFreq+1);
+				if (p.ToneFreqPos[3]===1) {	// only once per cycle
+					var Feedback = p.NoiseShiftRegister;	// int
+					if (p.Registers[6]&0x4) {	// white noise
+						switch (p.WhiteNoiseFeedback) {	// calculate parity of fed-back bits for feedback
+							case 0x0003:
+							case 0x0006:	// SC-3000, %00000110
+							case 0x0009:	// SMS, GG, MD, %00001001
+								Feedback = ((Feedback&p.WhiteNoiseFeedback)&&((Feedback&p.WhiteNoiseFeedback)^p.WhiteNoiseFeedback))?1:0;
+								break;
+							case 0x8005:	// BBC Micro, falls thru
+							default:
+								Feedback = Feedback&p.WhiteNoiseFeedback;
+								Feedback ^= Feedback>>8;
+								Feedback ^= Feedback>>4;
+								Feedback ^= Feedback>>2;
+								Feedback ^= Feedback>>1;
+								Feedback &= 1;
+								break;
+						}
+						//console.log('reg[6]='+p.Registers[6]+' (white), '+Feedback);
+					}
+					else {	// periodic noise
+						Feedback = Feedback&1;
+						//console.log('reg[6]='+p.Registers[6]+' (per), '+Feedback);
+					}
+					p.NoiseShiftRegister = (p.NoiseShiftRegister>>1)|(Feedback<<(p.NoiseShiftWidth-1));
+				}
+			}
+			buf[n++] += vl*_sc;
+			buf[n++] += vr*_sc;
+			//p.ToneFreqVals[3] |= 0;
+		}
+		//console.log("***:"+fv.toString(', '));
+		//console.log("***:"+nsr.toString(','));
+	})(sn76489);
+	return buf;
+};
+/* Toggle channel muting +neo */
+S.prototype.toggle = function(ch,m) {sn76489.muted[ch] = !m;}
 
-})();
+})(SN76489);
